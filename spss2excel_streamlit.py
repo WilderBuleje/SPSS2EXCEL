@@ -1,6 +1,6 @@
 import collections
 import collections.abc
-collections.Iterable = collections.abc.Iterable  # Compat. savReaderWriter en Python 3.10+
+collections.Iterable = collections.abc.Iterable  # Compatibilidad savReaderWriter en Python 3.10+
 
 import streamlit as st
 from savReaderWriter import SavReader
@@ -16,35 +16,33 @@ from typing import Dict, Any, List, Tuple
 TEXTS = {
     "es": {
         "title": "Convertir SPSS a Excel",
-        "subtitle": "Sube un archivo .sav/.zsav, aplica etiquetas y descarga Excel",
+        "subtitle": "Sube un archivo .sav/.zsav y descarga en Excel",
         "uploader": "📂 Arrastra o sube un archivo SPSS (.sav, .zsav)",
         "load_status": "Cargando archivo SPSS…",
         "success_load": "Archivo cargado correctamente ✅",
         "error_load": "Error al cargar archivo",
         "file_info": "**Archivo:** {name}  •  **Filas:** {rows:,}  •  **Columnas:** {cols}",
-        "preview": "Vista previa de datos",
         "download": "💾 Descargar como Excel (.xlsx)",
         "saving": "Generando Excel…",
         "success_save": "Excel generado ✅",
         "toggle_lang": "🌐 English",
-        "tips": "💡 Consejo: si tu archivo tiene muchas filas, la descarga puede tomar algunos segundos.",
+        "tips": "💡 Consejo: si tu archivo es grande, la descarga puede tardar algunos segundos.",
         "no_file": "Sube un archivo para comenzar",
         "sheetname": "Datos"
     },
     "en": {
         "title": "Convert SPSS to Excel",
-        "subtitle": "Upload a .sav/.zsav file, apply labels and download an Excel",
+        "subtitle": "Upload a .sav/.zsav file and download as Excel",
         "uploader": "📂 Drag & drop or upload an SPSS file (.sav, .zsav)",
         "load_status": "Loading SPSS file…",
         "success_load": "File loaded successfully ✅",
         "error_load": "Error loading file",
         "file_info": "**File:** {name}  •  **Rows:** {rows:,}  •  **Columns:** {cols}",
-        "preview": "Data preview",
         "download": "💾 Download as Excel (.xlsx)",
         "saving": "Generating Excel…",
         "success_save": "Excel generated ✅",
         "toggle_lang": "🌐 Español",
-        "tips": "💡 Tip: if your file is large, generating the download can take some seconds.",
+        "tips": "💡 Tip: if your file is large, generating the download may take a few seconds.",
         "no_file": "Upload a file to get started",
         "sheetname": "Data"
     },
@@ -60,8 +58,8 @@ def decode_bytes(x: Any) -> Any:
     return x
 
 @st.cache_data(show_spinner=False)
-def process_sav(file_bytes: bytes) -> Tuple[List[List[Any]], List[str], Dict[str, Dict[Any, str]]]:
-    """Procesa el SAV con SavReader, aplica etiquetas y retorna (rows, headers, value_labels)."""
+def process_sav(file_bytes: bytes) -> Tuple[List[List[Any]], List[str]]:
+    """Procesa el SAV con SavReader, aplica etiquetas y retorna (rows, headers)."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".sav") as tmp:
         tmp.write(file_bytes)
         tmp_path = tmp.name
@@ -106,7 +104,7 @@ def process_sav(file_bytes: bytes) -> Tuple[List[List[Any]], List[str], Dict[str
                 row.append(decode_bytes(val))
         rows.append(row)
 
-    return rows, final_headers, value_labels_dict
+    return rows, final_headers
 
 def to_excel_bytes(headers: List[str], rows: List[List[Any]], sheet_name: str) -> bytes:
     wb = Workbook()
@@ -136,16 +134,10 @@ def main():
         st.session_state.lang = "es"
 
     with st.sidebar:
-        st.markdown("### 🌐 Language / Idioma")
         toggle = st.toggle(TEXTS[st.session_state.lang]["toggle_lang"], value=False, key="lang_toggle")
         if toggle:
             st.session_state.lang = "en" if st.session_state.lang == "es" else "es"
         texts = TEXTS[st.session_state.lang]
-
-        st.markdown("---")
-        st.markdown("#### ⚙️ Opciones / Options")
-        show_preview = st.checkbox("👀 " + ("Vista previa" if st.session_state.lang == "es" else "Preview"), True)
-        preview_rows = st.number_input("Rows", min_value=5, max_value=200, value=30, step=5)
 
         st.markdown("---")
         st.info(texts["tips"])
@@ -164,7 +156,7 @@ def main():
     with st.status(texts["load_status"], expanded=False) as status:
         try:
             data_bytes = uploaded.getvalue()
-            rows, headers, _ = process_sav(data_bytes)
+            rows, headers = process_sav(data_bytes)
             status.update(label=texts["success_load"], state="complete")
         except Exception as e:
             status.update(label=f"{texts['error_load']}: {e}", state="error")
@@ -179,11 +171,6 @@ def main():
         st.metric("Size", f"{uploaded.size/1024/1024:.2f} MB")
 
     st.markdown(texts["file_info"].format(name=uploaded.name, rows=len(rows), cols=len(headers)))
-
-    # Vista previa SIN pandas
-    if show_preview and rows:
-        preview_data = [dict(zip(headers, r)) for r in rows[: int(preview_rows)]]
-        st.dataframe(preview_data, use_container_width=True)
 
     with st.spinner(texts["saving"]):
         excel_bytes = to_excel_bytes(headers, rows, texts["sheetname"])
