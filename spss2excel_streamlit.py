@@ -1,14 +1,14 @@
 import collections
 import collections.abc
-collections.Iterable = collections.abc.Iterable  # Compatibilidad savReaderWriter en Python 3.10+
+collections.Iterable = collections.abc.Iterable  # Compat. savReaderWriter en Python 3.10+
 
 import streamlit as st
 from savReaderWriter import SavReader
 from io import BytesIO
 from pathlib import Path
-from openpyxl import Workbook
 import tempfile
 from typing import Dict, Any, List, Tuple
+import xlsxwriter  # reemplazo de openpyxl
 
 # ======================
 # Traducciones
@@ -16,7 +16,7 @@ from typing import Dict, Any, List, Tuple
 TEXTS = {
     "es": {
         "title": "Convertir SPSS a Excel",
-        "subtitle": "Sube un archivo .sav/.zsav y descarga en Excel",
+        "subtitle": "Sube un archivo .sav/.zsav, aplica etiquetas y descarga Excel",
         "uploader": "📂 Arrastra o sube un archivo SPSS (.sav, .zsav)",
         "load_status": "Cargando archivo SPSS…",
         "success_load": "Archivo cargado correctamente ✅",
@@ -26,13 +26,13 @@ TEXTS = {
         "saving": "Generando Excel…",
         "success_save": "Excel generado ✅",
         "toggle_lang": "🌐 English",
-        "tips": "💡 Consejo: si tu archivo es grande, la descarga puede tardar algunos segundos.",
+        "tips": "💡 Consejo: si tu archivo tiene muchas filas, la descarga puede tomar algunos segundos.",
         "no_file": "Sube un archivo para comenzar",
         "sheetname": "Datos"
     },
     "en": {
         "title": "Convert SPSS to Excel",
-        "subtitle": "Upload a .sav/.zsav file and download as Excel",
+        "subtitle": "Upload a .sav/.zsav file, apply labels and download an Excel",
         "uploader": "📂 Drag & drop or upload an SPSS file (.sav, .zsav)",
         "load_status": "Loading SPSS file…",
         "success_load": "File loaded successfully ✅",
@@ -42,7 +42,7 @@ TEXTS = {
         "saving": "Generating Excel…",
         "success_save": "Excel generated ✅",
         "toggle_lang": "🌐 Español",
-        "tips": "💡 Tip: if your file is large, generating the download may take a few seconds.",
+        "tips": "💡 Tip: if your file is large, generating the download can take some seconds.",
         "no_file": "Upload a file to get started",
         "sheetname": "Data"
     },
@@ -59,7 +59,8 @@ def decode_bytes(x: Any) -> Any:
 
 @st.cache_data(show_spinner=False)
 def process_sav(file_bytes: bytes) -> Tuple[List[List[Any]], List[str]]:
-    """Procesa el SAV con SavReader, aplica etiquetas y retorna (rows, headers)."""
+    """Procesa el SAV con SavReader, aplica etiquetas de variables/valores y retorna (rows, headers)."""
+    # Escribir bytes a un archivo temporal
     with tempfile.NamedTemporaryFile(delete=False, suffix=".sav") as tmp:
         tmp.write(file_bytes)
         tmp_path = tmp.name
@@ -72,24 +73,26 @@ def process_sav(file_bytes: bytes) -> Tuple[List[List[Any]], List[str]]:
 
     headers_dict = {i: decode_bytes(h) for i, h in enumerate(header)}
 
-    var_labels_dict = {}
-    if varLabels:
-        for var_key, var_label in varLabels.items():
-            var_labels_dict[decode_bytes(var_key)] = decode_bytes(var_label)
+    var_labels_dict: Dict[str, str] = {
+        decode_bytes(k): decode_bytes(v) for k, v in varLabels.items()
+    } if varLabels else {}
 
     value_labels_dict: Dict[str, Dict[Any, str]] = {}
     if valueLabels:
         for var_key, val_dict in valueLabels.items():
             var_key_str = decode_bytes(var_key)
-            converted = {val_code: decode_bytes(val_label) for val_code, val_label in val_dict.items()}
-            value_labels_dict[var_key_str] = converted
+            value_labels_dict[var_key_str] = {
+                val_code: decode_bytes(val_label) for val_code, val_label in val_dict.items()
+            }
 
+    # Headers finales con etiqueta
     final_headers: List[str] = []
     for i in range(len(headers_dict)):
         var_name = headers_dict[i]
         label = var_labels_dict.get(var_name, "").strip()
         final_headers.append(f"{var_name} ({label})" if label else var_name)
 
+    # Filas con etiquetas aplicadas
     rows: List[List[Any]] = []
     for idx, record in enumerate(records):
         if idx == 0:
@@ -106,17 +109,25 @@ def process_sav(file_bytes: bytes) -> Tuple[List[List[Any]], List[str]]:
 
     return rows, final_headers
 
+
 def to_excel_bytes(headers: List[str], rows: List[List[Any]], sheet_name: str) -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = sheet_name
-    ws.append(headers)
-    for r in rows:
-        ws.append(r)
-    buf = BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
+    """Convierte a Excel usando XlsxWriter (más rápido y ligero que openpyxl)."""
+    output = BytesIO()
+    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+    worksheet = workbook.add_worksheet(sheet_name)
+
+    # Escribir encabezados
+    for col, h in enumerate(headers):
+        worksheet.write(0, col, h)
+
+    # Escribir filas
+    for row_idx, row in enumerate(rows, start=1):
+        for col_idx, val in enumerate(row):
+            worksheet.write(row_idx, col_idx, val)
+
+    workbook.close()
+    output.seek(0)
+    return output.getvalue()
 
 # ======================
 # UI – Streamlit
@@ -139,7 +150,6 @@ def main():
             st.session_state.lang = "en" if st.session_state.lang == "es" else "es"
         texts = TEXTS[st.session_state.lang]
 
-        st.markdown("---")
         st.info(texts["tips"])
 
     texts = TEXTS[st.session_state.lang]
@@ -162,6 +172,7 @@ def main():
             status.update(label=f"{texts['error_load']}: {e}", state="error")
             st.stop()
 
+    # Info del archivo
     cols = st.columns(3)
     with cols[0]:
         st.metric("Columns", len(headers))
@@ -183,6 +194,7 @@ def main():
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
+
 
 if __name__ == "__main__":
     main()
